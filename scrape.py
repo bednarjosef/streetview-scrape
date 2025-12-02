@@ -167,10 +167,3 @@ if __name__ == '__main__':
     os.makedirs(out_dir, exist_ok=True)
     locations = load_from_json('Czechia (100 locations).json')
     asyncio.run(scrape(locations, out_dir, max_concurrency=16))
-
-
-# if __name__ == '__main__':
-#     out_dir = 'panoramas_2'
-#     os.makedirs(out_dir, exist_ok=True)
-#     locations = load_from_json('Czechia (100 locations).json')
-#     asyncio.run(scrape(locations))
