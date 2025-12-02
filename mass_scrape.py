@@ -84,6 +84,8 @@ def save_four_views_from_pano(pano_img, out_dir, base_name="view", size=512):
             pitch_deg=0,
             out_size=(size, size),
         )
+        # you can also tweak JPEG quality here if you want:
+        # cv2.imwrite(fname, persp, [cv2.IMWRITE_JPEG_QUALITY, 85])
         cv2.imwrite(fname, persp)
 
 
@@ -95,7 +97,7 @@ def load_from_json(filepath):
 
 
 async def scrape_og(locations):
-    # your old sequential version (kept for reference)
+    # old sequential version (unchanged)
     total = len(locations)
     ts = time.time()
     for idx, location in enumerate(locations):
@@ -119,7 +121,6 @@ async def scrape_one(idx, location, session, sem, root_dir):
     """
     panoid = location['panoId']
 
-    # determine shard/folder for this pano
     shard_idx = idx // PANOS_PER_SHARD
     shard_dir = f"{shard_idx:06d}"
 
@@ -127,40 +128,47 @@ async def scrape_one(idx, location, session, sem, root_dir):
     img_dir = os.path.join(images_root, shard_dir)
     os.makedirs(img_dir, exist_ok=True)
 
-    async with sem:
-        try:
+    try:
+        # 1) NETWORK-BOUND PART (limited by semaphore)
+        async with sem:
             pano = await streetview.find_panorama_by_id_async(panoid, session=session)
             pano_img = await streetview.get_panorama_async(pano, zoom=2, session=session)
 
-            # save the 4 views into this shard folder
-            save_four_views_from_pano(pano_img, out_dir=img_dir, base_name=panoid)
+        # 2) CPU + DISK-BOUND PART (offloaded to thread pool)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,  # default ThreadPoolExecutor
+            save_four_views_from_pano,
+            pano_img,
+            img_dir,
+            panoid,
+        )
 
-            # relative paths for metadata
-            rel_views = [
-                f"images/{shard_dir}/{panoid}_1.jpg",
-                f"images/{shard_dir}/{panoid}_2.jpg",
-                f"images/{shard_dir}/{panoid}_3.jpg",
-                f"images/{shard_dir}/{panoid}_4.jpg",
-            ]
+        # relative paths for metadata
+        rel_views = [
+            f"images/{shard_dir}/{panoid}_1.jpg",
+            f"images/{shard_dir}/{panoid}_2.jpg",
+            f"images/{shard_dir}/{panoid}_3.jpg",
+            f"images/{shard_dir}/{panoid}_4.jpg",
+        ]
 
-            # pano.date is a CaptureDate -> make it JSON-serializable
-            date_value = str(pano.date)
+        date_value = str(pano.date)  # CaptureDate -> str
 
-            meta = {
-                "shard_idx": shard_idx,      # internal, for choosing jsonl file
-                "panoid": panoid,
-                "views": rel_views,
-                "country_code": pano.country_code,
-                "date": date_value,
-                "elevation": pano.elevation,
-                "lat": pano.lat,
-                "lon": pano.lon,
-            }
-            return meta
+        meta = {
+            "shard_idx": shard_idx,
+            "panoid": panoid,
+            "views": rel_views,
+            "country_code": pano.country_code,
+            "date": date_value,
+            "elevation": pano.elevation,
+            "lat": pano.lat,
+            "lon": pano.lon,
+        }
+        return meta
 
-        except Exception as e:
-            print(f"Error for {panoid}: {e}")
-            return None
+    except Exception as e:
+        print(f"Error for {panoid}: {e}")
+        return None
         
 
 async def scrape(locations, out_dir, max_concurrency=8):
@@ -173,14 +181,11 @@ async def scrape(locations, out_dir, max_concurrency=8):
     os.makedirs(images_root, exist_ok=True)
     os.makedirs(meta_root, exist_ok=True)
 
-    # shard_idx -> open jsonl file handle
     meta_files = {}
 
     def get_meta_file(shard_idx: int):
-        """Open (or reuse) a JSONL file for this shard."""
         if shard_idx not in meta_files:
             path = os.path.join(meta_root, f"panos-{shard_idx:06d}.jsonl")
-            # line-buffered so each line is flushed quickly
             f = open(path, "a", encoding="utf-8", buffering=1)
             meta_files[shard_idx] = f
         return meta_files[shard_idx]
@@ -205,12 +210,11 @@ async def scrape(locations, out_dir, max_concurrency=8):
                 f = get_meta_file(shard_idx)
                 f.write(json.dumps(meta, ensure_ascii=False) + "\n")
 
-            if done % 100 == 0 or done == total:
+            if done % 500 == 0 or done == total:
                 elapsed = time.time() - ts
                 lps = done / elapsed
                 print(f"[{done}/{total}] {lps:.2f} locations/s ({success} ok)")
 
-    # close metadata files
     for f in meta_files.values():
         f.close()
 
@@ -223,7 +227,7 @@ async def scrape(locations, out_dir, max_concurrency=8):
 
 
 if __name__ == '__main__':
-    out_dir = 'streetview_cz'
+    out_dir = 'streetview_world_2'
     os.makedirs(out_dir, exist_ok=True)
-    locations = load_from_json('Custom polygon 1 (100000 locations).json')
-    asyncio.run(scrape(locations, out_dir, max_concurrency=16))
+    locations = load_from_json('world_250k_2.json')
+    asyncio.run(scrape(locations, out_dir, max_concurrency=32))
