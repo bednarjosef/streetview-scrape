@@ -1,0 +1,7 @@
+.venv/
+pano2/
+panodir/
+panoramas/
+panoramas_2/
+Custom polygon 1 (100000 locations).json
+*.csv
