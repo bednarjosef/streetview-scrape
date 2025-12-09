@@ -6,7 +6,7 @@ from PIL import Image
 import aiohttp
 from asyncio import Semaphore
 
-PANOS_PER_SHARD = 10_000 
+PANOS_PER_SHARD = 10_000
 
 def equirect_to_perspective(img_bgr, fov_deg, yaw_deg, pitch_deg, out_size):
     w_out, h_out = out_size

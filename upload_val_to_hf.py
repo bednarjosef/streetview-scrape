@@ -113,7 +113,7 @@ def main():
     ds.push_to_hub(
         HF_REPO_ID, 
         private=PRIVATE_DATASET, 
-        split="validation",  # <--- THIS IS THE KEY CHANGE
+        split="val",  # <--- THIS IS THE KEY CHANGE
         max_shard_size="500MB",
         embed_external_files=True 
     )
