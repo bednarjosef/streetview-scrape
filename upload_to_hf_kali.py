@@ -6,10 +6,10 @@ from huggingface_hub import create_repo
 
 # --- CONFIGURATION ---
 # List your root folders here
-DATA_DIRS = ["streetview-prague"]
+DATA_DIRS = ["streetview-acw-300k"]
 
 # CHANGE THIS to your Hugging Face username and dataset name
-HF_REPO_ID = "josefbednar/prague-streetview-50k" 
+HF_REPO_ID = "josefbednar/streetview-acw-300k" 
 
 # Set to False if you want everyone to see it
 PRIVATE_DATASET = True 
@@ -72,10 +72,13 @@ def generate_examples():
                                 "image": full_path, # HF library handles opening this path
                                 # Metadata (duplicated for each view)
                                 "country_code": record.get("country_code"),
+                                "subdivision": record.get("subdivision"),
                                 "date": record.get("date"),
                                 "latitude": record.get("lat"),
                                 "longitude": record.get("lon"),
                                 "elevation": record.get("elevation"),
+                                "season": record.get("season"),
+                                "heading": record.get("heading")
                             }
                         
                         total_processed += 1
@@ -92,10 +95,13 @@ def main():
         "panoid": Value("string"),       # e.g., "g8s7d6f"
         "image": Image(),                # The actual image data
         "country_code": Value("string"),
+        "subdivision": Value("string"),
         "date": Value("string"),
         "latitude": Value("float64"),
         "longitude": Value("float64"),
         "elevation": Value("float64"),
+        "season": Value("string"),
+        "heading": Value("float64")
     })
 
     print(f"Initializing dataset stream from: {DATA_DIRS}")

@@ -227,7 +227,7 @@ async def scrape(locations, out_dir, max_concurrency=8):
 
 
 if __name__ == '__main__':
-    out_dir = 'streetview_world_2'
+    out_dir = 'streetview-prague'
     os.makedirs(out_dir, exist_ok=True)
-    locations = load_from_json('world_250k_2.json')
+    locations = load_from_json('prague_50k.json')
     asyncio.run(scrape(locations, out_dir, max_concurrency=32))

@@ -1,4 +1,4 @@
-import os, json, time, asyncio
+import os, json, time, asyncio, random
 from streetlevel import streetview
 import numpy as np
 import cv2
@@ -6,8 +6,7 @@ from PIL import Image
 import aiohttp
 from asyncio import Semaphore
 
-PANOS_PER_SHARD = 10_000  # 10k panos per shard/folder
-
+PANOS_PER_SHARD = 10_000
 
 def equirect_to_perspective(img_bgr, fov_deg, yaw_deg, pitch_deg, out_size):
     w_out, h_out = out_size
@@ -15,23 +14,18 @@ def equirect_to_perspective(img_bgr, fov_deg, yaw_deg, pitch_deg, out_size):
     yaw = np.deg2rad(yaw_deg)
     pitch = np.deg2rad(pitch_deg)
 
-    # focal length from FOV
     f = 0.5 * w_out / np.tan(fov / 2)
 
-    # pixel grid in image (screen) coordinates
     x = np.linspace(-w_out / 2, w_out / 2, w_out)
     y = np.linspace(-h_out / 2, h_out / 2, h_out)
     xx, yy = np.meshgrid(x, y)
     zz = np.full_like(xx, f)
 
-    # normalize direction vectors
     norm = np.sqrt(xx**2 + yy**2 + zz**2)
-
     xx = xx / norm
     yy = -yy / norm
     zz = zz / norm
 
-    # rotation matrices (yaw then pitch)
     cos_y, sin_y = np.cos(yaw), np.sin(yaw)
     cos_p, sin_p = np.cos(pitch), np.sin(pitch)
 
@@ -45,14 +39,12 @@ def equirect_to_perspective(img_bgr, fov_deg, yaw_deg, pitch_deg, out_size):
 
     R = Ry @ Rx
 
-    dirs = np.stack([xx, yy, zz], axis=-1)    # (h, w, 3)
-    dirs = dirs @ R.T                         # rotate
+    dirs = np.stack([xx, yy, zz], axis=-1)
+    dirs = dirs @ R.T
 
-    # convert directions to spherical coordinates
-    lon = np.arctan2(dirs[..., 0], dirs[..., 2])   # [-pi, pi]
-    lat = np.arcsin(dirs[..., 1])                  # [-pi/2, pi/2]
+    lon = np.arctan2(dirs[..., 0], dirs[..., 2])
+    lat = np.arcsin(dirs[..., 1])
 
-    # map to equirectangular pixel coords
     h_eq, w_eq, _ = img_bgr.shape
     x_map = (lon + np.pi) / (2 * np.pi) * w_eq
     y_map = (np.pi / 2 - lat) / np.pi * h_eq
@@ -66,27 +58,39 @@ def equirect_to_perspective(img_bgr, fov_deg, yaw_deg, pitch_deg, out_size):
     return out
 
 
-def save_four_views_from_pano(pano_img, out_dir, base_name="view", size=512):
+def save_random_view_from_pano(pano_img, out_dir, base_name, size=512):
+    """
+    Picks ONE random view (0, 90, 180, or -90) and saves it.
+    Returns the relative filename used.
+    """
     img_bgr = cv2.cvtColor(np.array(pano_img), cv2.COLOR_RGB2BGR)
 
-    yaws = [
-        (180, f"{out_dir}/{base_name}_1.jpg"),
-        (-90, f"{out_dir}/{base_name}_2.jpg"),
-        (0,   f"{out_dir}/{base_name}_3.jpg"),
-        (90,  f"{out_dir}/{base_name}_4.jpg"),
+    # Definitions: (Yaw, Suffix)
+    # We keep the suffix consistent so we know which direction it is later
+    options = [
+        (180, "_1.jpg"), # Back
+        (-90, "_2.jpg"), # Left
+        (0,   "_3.jpg"), # Front
+        (90,  "_4.jpg"), # Right
     ]
+    
+    # Pick one random tuple from the list
+    yaw, suffix = random.choice(options)
+    
+    filename = f"{base_name}{suffix}"
+    full_path = os.path.join(out_dir, filename)
 
-    for yaw, fname in yaws:
-        persp = equirect_to_perspective(
-            img_bgr,
-            fov_deg=90,
-            yaw_deg=yaw,
-            pitch_deg=0,
-            out_size=(size, size),
-        )
-        # you can also tweak JPEG quality here if you want:
-        # cv2.imwrite(fname, persp, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        cv2.imwrite(fname, persp)
+    persp = equirect_to_perspective(
+        img_bgr,
+        fov_deg=90,
+        yaw_deg=yaw,
+        pitch_deg=0,
+        out_size=(size, size),
+    )
+    cv2.imwrite(full_path, persp)
+    
+    # Return just the filename so we can log it
+    return filename
 
 
 def load_from_json(filepath):
@@ -95,29 +99,7 @@ def load_from_json(filepath):
         return data
 
 
-async def scrape_og(locations):
-    # old sequential version (unchanged)
-    total = len(locations)
-    ts = time.time()
-    for idx, location in enumerate(locations):
-        print(f'Scraping location {idx+1}/{total}...')
-        panoid = location['panoId']
-        pano = await streetview.find_panorama_by_id_async(panoid)
-        pano_img = await streetview.get_panorama_async(pano, zoom=2)
-        save_four_views_from_pano(pano_img, out_dir=out_dir, base_name=panoid)
-
-    te = time.time()
-    td = round(te-ts, 2)
-    lps = round(total / td, 2)
-    spl = round(1 / lps, 2)
-    print(f'Finished scraping {total} locations in {td} seconds - {lps} locations/second - {spl} seconds/location')
-
-
 async def scrape_one(idx, location, session, sem, root_dir):
-    """
-    Scrape a single panorama, save its 4 views into the correct shard folder,
-    and return a metadata dict (or None on error).
-    """
     panoid = location['panoId']
     tags = location['extra']['tags']
 
@@ -129,35 +111,30 @@ async def scrape_one(idx, location, session, sem, root_dir):
     os.makedirs(img_dir, exist_ok=True)
 
     try:
-        # 1) NETWORK-BOUND PART (limited by semaphore)
+        # 1) NETWORK-BOUND
         async with sem:
             pano = await streetview.find_panorama_by_id_async(panoid, session=session)
             pano_img = await streetview.get_panorama_async(pano, zoom=2, session=session)
 
-        # 2) CPU + DISK-BOUND PART (offloaded to thread pool)
+        # 2) CPU + DISK-BOUND (Save ONLY ONE random view)
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,  # default ThreadPoolExecutor
-            save_four_views_from_pano,
+        saved_filename = await loop.run_in_executor(
+            None,
+            save_random_view_from_pano,
             pano_img,
             img_dir,
             panoid,
         )
 
-        # relative paths for metadata
-        rel_views = [
-            f"images/{shard_dir}/{panoid}_1.jpg",
-            f"images/{shard_dir}/{panoid}_2.jpg",
-            f"images/{shard_dir}/{panoid}_3.jpg",
-            f"images/{shard_dir}/{panoid}_4.jpg",
-        ]
+        # Build the single relative path
+        rel_view = f"images/{shard_dir}/{saved_filename}"
 
-        date_value = str(pano.date)  # CaptureDate -> str
+        date_value = str(pano.date)
 
         meta = {
             "shard_idx": shard_idx,
             "panoid": panoid,
-            "views": rel_views,
+            "views": [rel_view],
             "country_code": pano.country_code,
             "subdivision": tags[1],
             "date": date_value,
@@ -213,7 +190,7 @@ async def scrape(locations, out_dir, max_concurrency=8):
                 f = get_meta_file(shard_idx)
                 f.write(json.dumps(meta, ensure_ascii=False) + "\n")
 
-            if done % 500 == 0 or done == total:
+            if done % 100 == 0 or done == total:
                 elapsed = time.time() - ts
                 lps = done / elapsed
                 print(f"[{done}/{total}] {lps:.2f} locations/s ({success} ok)")
@@ -223,14 +200,13 @@ async def scrape(locations, out_dir, max_concurrency=8):
 
     te = time.time()
     td = round(te - ts, 2)
-    lps = round(total / td, 2)
-    spl = round(1 / lps, 2)
-    print(f"Finished scraping {total} locations in {td} s "
-          f"- {lps} locations/s - {spl} seconds/location")
+    print(f"Finished scraping {total} locations in {td} s")
 
 
 if __name__ == '__main__':
+    # --- CHANGED CONFIG ---
     out_dir = 'streetview-acw-val'
     os.makedirs(out_dir, exist_ok=True)
     locations = load_from_json('acw-3k-val/world-locations.json')
+    # ----------------------
     asyncio.run(scrape(locations, out_dir, max_concurrency=32))

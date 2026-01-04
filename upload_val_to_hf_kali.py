@@ -7,7 +7,7 @@ from datasets import Dataset, Features, Value, Image
 # Point this to your NEW validation folder
 DATA_DIRS = ["streetview-prague-val"] 
 
-HF_REPO_ID = "josefbednar/prague-streetview-50k"
+HF_REPO_ID = "josefbednar/prague-streetview-50k" 
 PRIVATE_DATASET = True 
 
 def generate_examples():
@@ -75,10 +75,13 @@ def generate_examples():
                                 "panoid": panoid,
                                 "image": full_path,
                                 "country_code": record.get("country_code"),
+                                "subdivision": record.get("subdivision"),
                                 "date": record.get("date"),
                                 "latitude": record.get("lat"),
                                 "longitude": record.get("lon"),
                                 "elevation": record.get("elevation"),
+                                "season": record.get("season"),
+                                "heading": record.get("heading")
                             }
                         
                         total_processed += 1
@@ -94,10 +97,13 @@ def main():
         "panoid": Value("string"),
         "image": Image(),
         "country_code": Value("string"),
+        "subdivision": Value("string"),
         "date": Value("string"),
         "latitude": Value("float64"),
         "longitude": Value("float64"),
         "elevation": Value("float64"),
+        "season": Value("string"),
+        "heading": Value("float64")
     })
 
     print(f"Initializing VALIDATION dataset stream from: {DATA_DIRS}")
